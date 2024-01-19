@@ -56,6 +56,7 @@ class TLACDCExperiment:
         ref_ds: Optional[torch.Tensor],
         threshold: float,
         metric: Callable[[torch.Tensor], torch.Tensor],
+        images_output_dir: str,
         second_metric: Optional[Callable[[torch.Tensor], float]] = None,
         verbose: bool = False,
         hook_verbose: bool = False,
@@ -93,6 +94,8 @@ class TLACDCExperiment:
             However, a dead edge in the zero ablation cases outputs a non-zero output! (That is usually computed from zero inputs)")
 
         model.reset_hooks()
+
+        self.images_output_dir = images_output_dir
 
         self.remove_redundant = remove_redundant
         self.indices_mode = indices_mode
@@ -654,7 +657,7 @@ class TLACDCExperiment:
             self.remove_redundant_node(self.current_node)
 
         if is_this_node_used and self.current_node.incoming_edge_type.value != EdgeType.PLACEHOLDER.value:
-            fname = f"ims/img_new_{self.step_idx}.png"
+            fname = f"{self.images_output_dir}/img_new_{self.step_idx}.png"
             show(
                 self.corr,
                 fname=fname,
