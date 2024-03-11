@@ -7,6 +7,7 @@ from typing import Callable, Optional, Literal, List, Dict, Any, Tuple, Union, S
 import random
 from dataclasses import dataclass
 import torch
+
 from acdc.acdc_graphics import show
 from torch import nn
 from torch.nn import functional as F
@@ -126,7 +127,7 @@ class TLACDCExperiment:
         if early_exit: 
             return
             
-        self.reverse_topologically_sort_corr()
+        self.reverse_topologically_sort_corr(ds[0:1])
         self.current_node = self.corr.first_node()
         print(f"{self.current_node=}")
         self.corr = self.corr
@@ -222,7 +223,7 @@ class TLACDCExperiment:
                 wandb_return_dict["second_cur_metric"] = self.cur_second_metric
             wandb.log(wandb_return_dict)
 
-    def reverse_topologically_sort_corr(self):
+    def reverse_topologically_sort_corr(self, dummy_input):
         """Topologically sort the template corr"""
         for hook in self.model.hook_dict.values():
             assert len(hook.fwd_hooks) == 0, "Don't load the model with hooks *then* call this"
@@ -230,7 +231,7 @@ class TLACDCExperiment:
         new_graph = OrderedDict()
         cache=OrderedDict()
         self.model.cache_all(cache)
-        self.model(torch.arange(min(10, self.model.cfg.n_ctx)).unsqueeze(0)) # Some random forward pass so that we can see all the hook names
+        self.model(dummy_input) # Some random forward pass so that we can see all the hook names
         self.model.reset_hooks()
 
         if self.verbose:
