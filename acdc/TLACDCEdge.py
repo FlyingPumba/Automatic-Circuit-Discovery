@@ -71,7 +71,7 @@ class TorchIndex:
 
     def __init__(
         self,
-        list_of_things_in_tuple: Iterable[int] | None,
+        list_of_things_in_tuple: Iterable[int | None | Iterable[int]],
     ):
         # check correct types
         for arg in list_of_things_in_tuple:

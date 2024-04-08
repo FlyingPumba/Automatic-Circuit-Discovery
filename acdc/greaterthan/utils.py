@@ -255,7 +255,7 @@ def get_year_data(num_examples, model):
     return prompts_tokenized, prompts
 
 
-def get_all_greaterthan_things(num_examples, metric_name, device="cuda"):
+def get_all_greaterthan_things(num_examples, metric_name, device: str | torch.device = "cuda"):
     model = get_gpt2_small(device=device)
     data, prompts = get_year_data(num_examples * 2, model)
     patch_data = data.clone()
