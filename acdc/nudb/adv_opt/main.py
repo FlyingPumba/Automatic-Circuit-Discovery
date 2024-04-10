@@ -176,7 +176,9 @@ def main(settings: ExperimentSettings) -> None:
                         .entropy()
                         .item(),
                         "gradient_norm": torch.norm(convex_coefficients.grad).item(),
+                        "gradient_patch_norm": torch.norm(convex_coefficients_patch.grad).item(),
                         "coefficients_norm": torch.norm(convex_coefficients).item(),
+                        "coefficients_patch_norm": torch.norm(convex_coefficients_patch).item(),
                         "noise_kl_div": F.kl_div(
                             convex_coefficients,
                             convex_coefficients_with_noise_and_temp * temperature,

@@ -363,6 +363,7 @@ class TestMaskedRunner:
         assert coefficients_test_singlepatch.grad is not None
         assert coefficients_test_convexpatch.grad is not None
         assert coefficients_test_convexpatch_onpatch.grad is not None
+        assert coefficients_test_singlepatch_allablated.grad is not None
 
         assert not torch.allclose(coefficients_test_singlepatch.grad, torch.tensor(0.0, dtype=torch.float32))
         assert torch.allclose(coefficients_test_singlepatch_allablated.grad, torch.tensor(0.0, dtype=torch.float32))

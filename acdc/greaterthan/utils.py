@@ -438,7 +438,7 @@ def get_greaterthan_true_edges(model) -> dict[EdgeAsTuple, bool]:
     ret = OrderedDict(
         {
             # child first, parent second
-            (t[2], t[3].hashable_tuple, t[0], t[1].hashable_tuple): edge.present
+            (t[0], t[1].hashable_tuple, t[2], t[3].hashable_tuple): edge.present
             for t, edge in corr.edge_dict().items()
             if edge.present
         }
