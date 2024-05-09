@@ -409,7 +409,7 @@ exp = TLACDCExperiment(
     model=things.tl_model,
     threshold=100_000,
     early_exit=SKIP_ACDC and SKIP_CANONICAL,
-    wandb_settings=None,
+    using_wandb=False,
     zero_ablation=bool(ZERO_ABLATION),
     # Process very little data if just building the canonical graph
     ds=things.test_data[slice(1) if ONLY_SAVE_CANONICAL else slice(None)],

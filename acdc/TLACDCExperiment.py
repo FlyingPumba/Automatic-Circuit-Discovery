@@ -1,5 +1,26 @@
 import pickle
 import random
+from dataclasses import dataclass
+import torch
+
+from acdc.acdc_graphics import show
+from torch import nn
+from torch.nn import functional as F
+from acdc.TLACDCInterpNode import TLACDCInterpNode
+from acdc.TLACDCCorrespondence import TLACDCCorrespondence
+from transformer_lens.HookedTransformer import HookedTransformer
+from acdc.global_cache import GlobalCache
+from acdc.acdc_graphics import log_metrics_to_wandb
+import warnings
+import wandb
+from acdc.acdc_utils import extract_info, shuffle_tensor
+from acdc.TLACDCEdge import (
+    TorchIndex,
+    Edge, 
+    EdgeType,
+)  # these introduce several important classes !!!
+from collections import OrderedDict
+from functools import partial
 import time
 import warnings
 from argparse import Namespace
@@ -33,18 +54,6 @@ Subgraph = dict[
 T = TypeVar("T")
 
 
-@dataclass
-class WandbSettings:
-    wandb_entity_name: str = ""
-    wandb_project_name: str = ""
-    wandb_run_name: str = ""
-    wandb_group_name: str = ""
-    wandb_notes: str = ""
-    wandb_dir: Optional[str] = None
-    wandb_mode: str = "online"
-    wandb_config: Optional[Namespace] = None
-
-
 class TLACDCExperiment:
     """Manages an ACDC experiment, including the computational graph, the model, the data etc.
 
@@ -69,6 +78,7 @@ class TLACDCExperiment:
         ref_ds: Optional[torch.Tensor],
         threshold: float,
         metric: Callable[[torch.Tensor], torch.Tensor],
+        images_output_dir: str,
         second_metric: Optional[Callable[[torch.Tensor], float]] = None,
         verbose: bool = False,
         hook_verbose: bool = False,
@@ -78,8 +88,16 @@ class TLACDCExperiment:
         corrupted_cache_cpu: bool = True,
         zero_ablation: bool = False,  # use zero rather than
         abs_value_threshold: bool = False,
-        show_full_index=False,
-        wandb_settings: WandbSettings | None = None,
+        show_full_index = False,
+        using_wandb: bool = False,
+        wandb_entity_name: str = "",
+        wandb_project_name: str = "",
+        wandb_run_name: str = "",
+        wandb_group_name: str = "",
+        wandb_notes: str = "",
+        wandb_tags: list[str] = [],
+        wandb_dir: Optional[str]=None,
+        wandb_mode: str="online",
         use_pos_embed: bool = False,
         skip_edges="no",
         add_sender_hooks: bool = True,
@@ -88,6 +106,7 @@ class TLACDCExperiment:
             "normal", "reverse", "shuffle"
         ] = "reverse",  # we get best performance with reverse I think
         names_mode: Literal["normal", "reverse", "shuffle"] = "normal",
+        wandb_config: Optional[Namespace] = None,
         early_exit: bool = False,
         positions: Optional[list[int]] = None,  # if None, do not split by position. TODO change the syntax here...
     ):
@@ -105,6 +124,8 @@ class TLACDCExperiment:
             warnings.warn("Never skipping edges, for now")
 
         model.reset_hooks()
+
+        self.images_output_dir = images_output_dir
 
         self.remove_redundant = remove_redundant
         self.indices_mode = indices_mode
@@ -126,17 +147,18 @@ class TLACDCExperiment:
         self.skip_edges = skip_edges
         self.corr = TLACDCCorrespondence.setup_from_model(self.model, use_pos_embed=use_pos_embed)
 
+        if early_exit: 
+            return
+            
+        self.reverse_topologically_sort_corr(ds[0:1])
+        self.current_node = self.corr.first_node()
+        print(f"{self.current_node=}")
+        self.corr = self.corr
+
         self.ds = ds
         self.ref_ds = ref_ds
         self.online_cache_cpu = online_cache_cpu
         self.corrupted_cache_cpu = corrupted_cache_cpu
-
-        if early_exit:
-            return
-
-        self.reverse_topologically_sort_corr()
-        self.current_node = self.corr.first_node()
-        print(f"{self.current_node=}")
 
         if zero_ablation:
             if self.ref_ds is None:
@@ -159,18 +181,18 @@ class TLACDCExperiment:
             add_receiver_hooks=add_receiver_hooks,
         )
 
-        self.using_wandb = bool(wandb_settings)
-        if self.using_wandb:
-            assert wandb_settings is not None
+        self.using_wandb = using_wandb
+        if using_wandb:
             wandb.init(
-                entity=wandb_settings.wandb_entity_name,
-                group=wandb_settings.wandb_group_name,
-                project=wandb_settings.wandb_project_name,
-                name=wandb_settings.wandb_run_name,
-                notes=wandb_settings.wandb_notes,
-                dir=wandb_settings.wandb_dir,
-                mode=wandb_settings.wandb_mode,
-                config=wandb_settings.wandb_config,
+                entity=wandb_entity_name,
+                group=wandb_group_name,
+                project=wandb_project_name,
+                name=wandb_run_name,
+                notes=wandb_notes,
+                tags=wandb_tags,
+                dir=wandb_dir,
+                mode=wandb_mode,
+                config=wandb_config,
             )
 
         self.metric = lambda x: metric(x).item()
@@ -230,7 +252,7 @@ class TLACDCExperiment:
                 wandb_return_dict["second_cur_metric"] = self.cur_second_metric
             wandb.log(wandb_return_dict)
 
-    def reverse_topologically_sort_corr(self):
+    def reverse_topologically_sort_corr(self, dummy_input):
         """Topologically sort the template corr"""
         for hook in self.model.hook_dict.values():
             assert len(hook.fwd_hooks) == 0, "Don't load the model with hooks *then* call this"
@@ -238,9 +260,7 @@ class TLACDCExperiment:
         new_graph = OrderedDict()
         cache = OrderedDict()
         self.model.cache_all(cache)
-        self.model(
-            torch.arange(min(10, self.model.cfg.d_vocab)).unsqueeze(0)
-        )  # Some random forward pass so that we can see all the hook names
+        self.model(dummy_input) # Some random forward pass so that we can see all the hook names
         self.model.reset_hooks()
 
         if self.verbose:
@@ -743,7 +763,7 @@ class TLACDCExperiment:
             self.remove_redundant_node(self.current_node)
 
         if is_this_node_used and self.current_node.incoming_edge_type.value != EdgeType.PLACEHOLDER.value:
-            fname = f"ims/img_new_{self.step_idx}.png"
+            fname = f"{self.images_output_dir}/img_new_{self.step_idx}.png"
             show(
                 self.corr,
                 fname=fname,

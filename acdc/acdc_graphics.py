@@ -133,7 +133,7 @@ def show(
     correspondence: TLACDCCorrespondence,
     fname=None,
     colorscheme: Union[Dict, str] = "Pastel2",
-    minimum_penwidth: float = 0.3,
+    minimum_penwidth: float = 1,
     show_full_index: bool = True,
     remove_self_loops: bool = True,
     remove_qkv: bool = False,
@@ -240,7 +240,6 @@ def graph_from_edges(
         if not show_everything:
             if (
                 (not edge.present)
-                or edge.effect_size is None
                 or ((not show_placeholders) and edge.edge_type == EdgeType.PLACEHOLDER)
             ):
                 continue
@@ -259,10 +258,14 @@ def graph_from_edges(
                 **maybe_pos,
             )
 
+        edge_width = minimum_penwidth * 2
+        if edge.effect_size is not None:
+            edge_width = max(minimum_penwidth, edge.effect_size) * 2
+
         g.add_edge(
             parent_name,
             child_name,
-            penwidth=str(max(minimum_penwidth, edge.effect_size or 0) * 2),
+            penwidth=str(edge_width),
             color=(colors[parent_name] if not edge_type_colouring else EDGE_TYPE_COLORS[edge.edge_type.value]),
         )
 

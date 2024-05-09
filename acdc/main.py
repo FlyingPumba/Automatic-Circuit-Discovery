@@ -354,20 +354,15 @@ tl_model.reset_hooks()
 exp = TLACDCExperiment(
     model=tl_model,
     threshold=THRESHOLD,
-    wandb_settings=(
-        WandbSettings(
-            wandb_entity_name=WANDB_ENTITY_NAME,
-            wandb_project_name=WANDB_PROJECT_NAME,
-            wandb_run_name=WANDB_RUN_NAME,
-            wandb_group_name=WANDB_GROUP_NAME,
-            wandb_notes=notes,
-            wandb_dir=args.wandb_dir,
-            wandb_mode=args.wandb_mode,
-            wandb_config=args,
-        )
-        if USING_WANDB
-        else None
-    ),
+    using_wandb=USING_WANDB,
+    wandb_entity_name=WANDB_ENTITY_NAME,
+    wandb_project_name=WANDB_PROJECT_NAME,
+    wandb_run_name=WANDB_RUN_NAME,
+    wandb_group_name=WANDB_GROUP_NAME,
+    wandb_notes=notes,
+    wandb_dir=args.wandb_dir,
+    wandb_mode=args.wandb_mode,
+    wandb_config=args,
     zero_ablation=ZERO_ABLATION,
     abs_value_threshold=args.abs_value_threshold,
     ds=toks_int_values,

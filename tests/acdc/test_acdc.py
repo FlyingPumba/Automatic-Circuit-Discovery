@@ -48,7 +48,7 @@ def test_induction_several_steps():
     exp = TLACDCExperiment(
         model=tl_model,
         threshold=0.1,
-        wandb_settings=None,
+        using_wandb=False,
         zero_ablation=False,
         ds=toks_int_values,
         ref_ds=toks_int_values_other,
@@ -295,7 +295,7 @@ def test_full_correspondence_zero_kl(
         model=things.tl_model,
         threshold=100_000,
         early_exit=False,
-        wandb_settings=None,
+        using_wandb=False,
         zero_ablation=zero_ablation,
         ds=things.test_data,
         ref_ds=things.test_patch_data,
