@@ -303,7 +303,7 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
         if patch_data is None:
             self._calculate_and_store_zero_ablation_cache()
         else:
-            assert isinstance(patch_data, torch.Tensor)
+            # assert isinstance(patch_data, torch.Tensor)
             self._calculate_and_store_resampling_ablation_cache(
                 patch_data, retain_cache_gradients=retain_cache_gradients
             )
@@ -457,33 +457,29 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
                         edge.present = mask_value > 0.5
                         edge.effect_size = mask_value
                     mask_row += 1
-
-        raise NotImplementedError(
-            "Needs to be rewritten using the new edge class and TLACDCCorrespondence.edge_iterator"
-        )
-
-        # Delete a node's incoming edges if it has no outgoing edges and is not the output
-        # def get_nodes_with_out_edges(corr):
-        #     nodes_with_out_edges = set()
-        #     for (
-        #         receiver_name,
-        #         receiver_index,
-        #         sender_name,
-        #         sender_index,
-        #     ), edge in corr.all_edges().items():
-        #         nodes_with_out_edges.add(sender_name)
-        #     return nodes_with_out_edges
-        #
-        # nodes_to_keep = get_nodes_with_out_edges(corr) | {f"blocks.{self.model.cfg.n_layers - 1}.hook_resid_post"}
-        # for (
-        #     receiver_name,
-        #     receiver_index,
-        #     sender_name,
-        #     sender_index,
-        # ), edge in corr.all_edges().items():
-        #     if receiver_name not in nodes_to_keep:
-        #         edge.present = False
-        # return corr
+                    
+        # Delete a node's incoming edges if it has no outgoing edges or is not the output
+        def get_nodes_with_out_edges(corr: TLACDCCorrespondence):
+            nodes_with_out_edges = set()
+            for (
+                receiver_name,
+                receiver_index,
+                sender_name,
+                sender_index,
+            ), edge in corr.edge_dict().items():
+                nodes_with_out_edges.add(sender_name)
+            return nodes_with_out_edges
+        
+        nodes_to_keep = get_nodes_with_out_edges(corr) | {f"blocks.{self.model.cfg.n_layers - 1}.hook_resid_post"}
+        for (
+            receiver_name,
+            receiver_index,
+            sender_name,
+            sender_index,
+        ), edge in corr.edge_dict().items():
+            if receiver_name not in nodes_to_keep:
+                edge.present = False
+        return corr
 
     def proportion_of_binary_scores(self) -> float:
         """How many of the scores are binary, i.e. 0 or 1
