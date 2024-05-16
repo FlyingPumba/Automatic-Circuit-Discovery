@@ -2,7 +2,16 @@ import logging
 import math
 from contextlib import contextmanager
 from enum import Enum
-from typing import Callable, ContextManager, Iterable, Iterator, Sequence, TypeAlias, Union, cast
+from typing import (
+    Callable,
+    ContextManager,
+    Iterable,
+    Iterator,
+    Sequence,
+    TypeAlias,
+    Union,
+    cast,
+)
 
 import torch
 from einops import rearrange
@@ -12,11 +21,14 @@ from transformer_lens.hook_points import HookPoint, NamesFilter
 from transformer_lens.HookedTransformer import Loss
 
 from acdc.TLACDCCorrespondence import TLACDCCorrespondence
-from acdc.TLACDCEdge import HookPointName, TorchIndex
+from acdc.TLACDCEdge import HookPointName, TorchIndex, EdgeType
+from acdc.acdc_utils import get_present_nodes
 
 logger = logging.getLogger(__name__)
 
-PatchData: TypeAlias = Num[torch.Tensor, "batch pos"] | None  # use None if you want zero ablation
+PatchData: TypeAlias = (
+    Num[torch.Tensor, "batch pos"] | None
+)  # use None if you want zero ablation
 
 
 class CircuitStartingPointType(str, Enum):
@@ -80,13 +92,21 @@ def create_mask_parameters_and_forward_cache_hook_points(
         We need to add a parameter to mask the input to these units
         """
         nonlocal num_output_units_so_far
-        hook_point_to_parents[mask_name] = ordered_forward_cache_hook_points[:]  # everything that has come before
+        hook_point_to_parents[mask_name] = ordered_forward_cache_hook_points[
+            :
+        ]  # everything that has come before
 
         new_mask_parameter = torch.nn.Parameter(
-            torch.full((num_output_units_so_far, num_instances), mask_init_constant, device=device)
+            torch.full(
+                (num_output_units_so_far, num_instances),
+                mask_init_constant,
+                device=device,
+            )
         )
         mask_parameter_list.append(new_mask_parameter)
-        mask_parameter_dict[mask_name] = new_mask_parameter  # pyright: ignore reportArgumentType  # seems to be an issue with pyright or with torch.nn.Parameter?
+        mask_parameter_dict[mask_name] = (
+            new_mask_parameter  # pyright: ignore reportArgumentType  # seems to be an issue with pyright or with torch.nn.Parameter?
+        )
 
     match circuit_start_type:
         case CircuitStartingPointType.POS_EMBED:
@@ -103,18 +123,30 @@ def create_mask_parameters_and_forward_cache_hook_points(
     # Mask logits have a variable dimension depending on the number of in-edges (increases with layer)
     for layer_i in range(num_layers):
         for q_k_v in ["q", "k", "v"]:
-            setup_input_hook_point(mask_name=f"blocks.{layer_i}.hook_{q_k_v}_input", num_instances=num_heads)
+            setup_input_hook_point(
+                mask_name=f"blocks.{layer_i}.hook_{q_k_v}_input",
+                num_instances=num_heads,
+            )
 
         setup_output_hook_point(f"blocks.{layer_i}.attn.hook_result", num_heads)
 
         if not attn_only:
-            setup_input_hook_point(mask_name=f"blocks.{layer_i}.hook_mlp_in", num_instances=1)
+            setup_input_hook_point(
+                mask_name=f"blocks.{layer_i}.hook_mlp_in", num_instances=1
+            )
             setup_output_hook_point(f"blocks.{layer_i}.hook_mlp_out", num_instances=1)
 
     # why does this get a mask? isn't it pointless to mask this?
-    setup_input_hook_point(mask_name=f"blocks.{num_layers - 1}.hook_resid_post", num_instances=1)
+    setup_input_hook_point(
+        mask_name=f"blocks.{num_layers - 1}.hook_resid_post", num_instances=1
+    )
 
-    return ordered_forward_cache_hook_points, hook_point_to_parents, mask_parameter_list, mask_parameter_dict
+    return (
+        ordered_forward_cache_hook_points,
+        hook_point_to_parents,
+        mask_parameter_list,
+        mask_parameter_dict,
+    )
 
 
 class EdgeLevelMaskedTransformer(torch.nn.Module):
@@ -137,8 +169,12 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
     model: HookedTransformer
     ablation_cache: ActivationCache
     forward_cache: ActivationCache
-    hook_point_to_parents: dict[HookPointName, list[HookPointName]]  # the parents of each hook point
-    mask_parameter_list: torch.nn.ParameterList  # the parameters that we use to mask the input to each node
+    hook_point_to_parents: dict[
+        HookPointName, list[HookPointName]
+    ]  # the parents of each hook point
+    mask_parameter_list: (
+        torch.nn.ParameterList
+    )  # the parameters that we use to mask the input to each node
     _mask_parameter_dict: dict[
         str, torch.nn.Parameter
     ]  # same parameters, but indexed by the hook point that they are applied to
@@ -184,7 +220,9 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
         # Copied from subnetwork probing code. Similar to log odds (but not the same)
         p = (self.mask_init_p - self.gamma) / (self.zeta - self.gamma)
 
-        model.cfg.use_hook_mlp_in = True  # We need to hook the MLP input to do subnetwork probing
+        model.cfg.use_hook_mlp_in = (
+            True  # We need to hook the MLP input to do subnetwork probing
+        )
 
         (
             self.forward_cache_hook_points,
@@ -207,8 +245,15 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
     def sample_mask(self, mask_name: str) -> torch.Tensor:
         """Samples a binary-ish mask from the mask_scores for the particular `mask_name` activation"""
         mask_parameters = self._mask_parameter_dict[mask_name]
-        uniform_sample = torch.zeros_like(mask_parameters, requires_grad=False).uniform_().clamp_(0.0001, 0.9999)
-        s = torch.sigmoid((uniform_sample.log() - (1 - uniform_sample).log() + mask_parameters) / self.beta)
+        uniform_sample = (
+            torch.zeros_like(mask_parameters, requires_grad=False)
+            .uniform_()
+            .clamp_(0.0001, 0.9999)
+        )
+        s = torch.sigmoid(
+            (uniform_sample.log() - (1 - uniform_sample).log() + mask_parameters)
+            / self.beta
+        )
         s_bar = s * (self.zeta - self.gamma) + self.gamma
         mask = s_bar.clamp(min=0.0, max=1.0)
 
@@ -216,21 +261,28 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
 
     def regularization_loss(self) -> torch.Tensor:
         center = self.beta * math.log(-self.gamma / self.zeta)
-        per_parameter_loss = [torch.sigmoid(scores - center).mean() for scores in self.mask_parameter_list]
+        per_parameter_loss = [
+            torch.sigmoid(scores - center).mean() for scores in self.mask_parameter_list
+        ]
         return torch.mean(torch.stack(per_parameter_loss))
 
     def _calculate_and_store_zero_ablation_cache(self) -> None:
         """Caches zero for every possible mask point."""
-        patch_data = torch.zeros((1, 1), device=self.device, dtype=torch.int64)  # batch pos
+        patch_data = torch.zeros(
+            (1, 1), device=self.device, dtype=torch.int64
+        )  # batch pos
         self._calculate_and_store_resampling_ablation_cache(
             patch_data
         )  # wtf? is this just to initialize the cache object? if we had tests, I would refactor this
         self.ablation_cache.cache_dict = {
-            name: torch.zeros_like(scores) for name, scores in self.ablation_cache.cache_dict.items()
+            name: torch.zeros_like(scores)
+            for name, scores in self.ablation_cache.cache_dict.items()
         }
 
     def _calculate_and_store_resampling_ablation_cache(
-        self, patch_data: Num[torch.Tensor, "batch pos"], retain_cache_gradients: bool = False
+        self,
+        patch_data: Num[torch.Tensor, "batch pos"],
+        retain_cache_gradients: bool = False,
     ) -> None:
         # Only cache the tensors needed to fill the masked out positions
         if not retain_cache_gradients:
@@ -270,7 +322,11 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
         names_filter = self._convert_names_filter(names_filter)
         fwd_hooks = cast(
             list[tuple[str | Callable, Callable]],
-            [(name, save_hook) for name in self.model.hook_dict.keys() if names_filter(name)],
+            [
+                (name, save_hook)
+                for name in self.model.hook_dict.keys()
+                if names_filter(name)
+            ],
         )
 
         with self.hooks(fwd_hooks=fwd_hooks) as runner_with_cache:
@@ -295,7 +351,9 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
 
         return names_filter
 
-    def calculate_and_store_ablation_cache(self, patch_data: PatchData, retain_cache_gradients: bool = True):
+    def calculate_and_store_ablation_cache(
+        self, patch_data: PatchData, retain_cache_gradients: bool = True
+    ):
         """Use None for the patch data for zero ablation.
 
         If you want to calculate gradients on the patch data/the cache, set retain_cache_gradients=True.
@@ -327,19 +385,33 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
             result.append(value)
         return torch.cat(result, dim=2)
 
-    def compute_weighted_values(self, hook: HookPoint) -> Float[torch.Tensor, "batch pos head_index d_resid"]:
-        parent_names = self.hook_point_to_parents[hook.name]  # pyright: ignore # hook.name is not typed correctly
-        ablation_values = self.get_activation_values(parent_names, self.ablation_cache)  # b s i d (i = parentindex)
-        forward_values = self.get_activation_values(parent_names, self.forward_cache)  # b s i d
+    def compute_weighted_values(
+        self, hook: HookPoint
+    ) -> Float[torch.Tensor, "batch pos head_index d_resid"]:
+        parent_names = self.hook_point_to_parents[
+            hook.name
+        ]  # pyright: ignore # hook.name is not typed correctly
+        ablation_values = self.get_activation_values(
+            parent_names, self.ablation_cache
+        )  # b s i d (i = parentindex)
+        forward_values = self.get_activation_values(
+            parent_names, self.forward_cache
+        )  # b s i d
         mask = self.sample_mask(
             hook.name  # pyright: ignore # hook.name is not typed correctly
         )  # in_edges, nodes_per_mask, ...
 
-        weighted_ablation_values = torch.einsum("b s i d, i o -> b s o d", ablation_values, 1 - mask)
-        weighted_forward_values = torch.einsum("b s i d, i o -> b s o d", forward_values, mask)
+        weighted_ablation_values = torch.einsum(
+            "b s i d, i o -> b s o d", ablation_values, 1 - mask
+        )
+        weighted_forward_values = torch.einsum(
+            "b s i d, i o -> b s o d", forward_values, mask
+        )
         return weighted_ablation_values + weighted_forward_values
 
-    def activation_mask_hook(self, hook_point_out: torch.Tensor, hook: HookPoint, verbose=False):
+    def activation_mask_hook(
+        self, hook_point_out: torch.Tensor, hook: HookPoint, verbose=False
+    ):
         """
         For edge-level SP, we discard the hook_point_out value and resum the residual stream.
         """
@@ -347,7 +419,9 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
         show(f"Doing ablation of {hook.name}")
         mem1 = torch.cuda.memory_allocated()
         show(f"Using memory {mem1:_} bytes at hook start")
-        is_attn = "mlp" not in hook.name and "resid_post" not in hook.name  # pyright: ignore # hook.name is not typed correctly
+        is_attn = (
+            "mlp" not in hook.name and "resid_post" not in hook.name
+        )  # pyright: ignore # hook.name is not typed correctly
 
         # To trade off CPU against memory, you can use
         #    out = checkpoint(self.compute_weighted_values, hook, use_reentrant=False)
@@ -359,9 +433,13 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
         # add back attention bias
         # Explanation: the attention bias is not part of the cached values (why not?), so we need to add it back here
         # we need to iterate over all attention layers that come before current layer
-        current_block_index = int(hook.name.split(".")[1])  # pyright: ignore # hook.name is not typed correctly
+        current_block_index = int(
+            hook.name.split(".")[1]
+        )  # pyright: ignore # hook.name is not typed correctly
         last_attention_block_index = (
-            current_block_index + 1 if ("resid_post" in hook.name or "mlp" in hook.name) else current_block_index  # pyright: ignore # hook.name is not typed correctly
+            current_block_index + 1
+            if ("resid_post" in hook.name or "mlp" in hook.name)
+            else current_block_index  # pyright: ignore # hook.name is not typed correctly
         )
         for layer in self.model.blocks[:last_attention_block_index]:  # pyright: ignore
             out += layer.attn.b_O
@@ -373,9 +451,13 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
         if self.verbose:
             no_change = torch.allclose(hook_point_out, out)
             absdiff = (hook_point_out - out).abs().mean()
-            print(f"Ablation hook {'did NOT' if no_change else 'DID'} change {hook.name} by {absdiff:.3f}")
+            print(
+                f"Ablation hook {'did NOT' if no_change else 'DID'} change {hook.name} by {absdiff:.3f}"
+            )
         torch.cuda.empty_cache()
-        show(f"Using memory {torch.cuda.memory_allocated():_} bytes after clearing cache")
+        show(
+            f"Using memory {torch.cuda.memory_allocated():_} bytes after clearing cache"
+        )
         return out
 
     def caching_hook(self, hook_point_out: torch.Tensor, hook: HookPoint):
@@ -386,15 +468,25 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
     def fwd_hooks(self) -> list[tuple[str | Callable, Callable]]:
         return cast(
             list[tuple[str | Callable, Callable]],
-            [(hook_point, self.activation_mask_hook) for hook_point in self.mask_parameter_names]
-            + [(hook_point, self.caching_hook) for hook_point in self.forward_cache_hook_points],
+            [
+                (hook_point, self.activation_mask_hook)
+                for hook_point in self.mask_parameter_names
+            ]
+            + [
+                (hook_point, self.caching_hook)
+                for hook_point in self.forward_cache_hook_points
+            ],
         )
 
     def with_fwd_hooks(self) -> ContextManager[HookedTransformer]:
         return self.model.hooks(self.fwd_hooks())
 
-    def with_fwd_hooks_and_new_ablation_cache(self, patch_data: PatchData) -> ContextManager[HookedTransformer]:
-        self.calculate_and_store_ablation_cache(patch_data, retain_cache_gradients=False)
+    def with_fwd_hooks_and_new_ablation_cache(
+        self, patch_data: PatchData
+    ) -> ContextManager[HookedTransformer]:
+        self.calculate_and_store_ablation_cache(
+            patch_data, retain_cache_gradients=False
+        )
         return self.with_fwd_hooks()
 
     @contextmanager
@@ -431,35 +523,57 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
     def num_params(self):
         return sum(p.numel() for p in self.mask_parameter_list)
 
-    def get_edge_level_correspondence_from_masks(self, use_pos_embed: bool | None = None) -> TLACDCCorrespondence:
+    def get_edge_level_correspondence_from_masks(
+        self, use_pos_embed: bool | None = None, verbose=False
+    ) -> TLACDCCorrespondence:
+        show = print if verbose else lambda *args, **kwargs: None
         if use_pos_embed is None:
-            use_pos_embed = self.starting_point_type == CircuitStartingPointType.POS_EMBED
-        corr = TLACDCCorrespondence.setup_from_model(self.model, use_pos_embed=use_pos_embed)
+            use_pos_embed = (
+                self.starting_point_type == CircuitStartingPointType.POS_EMBED
+            )
+        corr = TLACDCCorrespondence.setup_from_model(
+            self.model, use_pos_embed=use_pos_embed
+        )
 
         # Define edges
         def indexes(name):
-            if "mlp" in name or "resid" in name or "embed" in name or name == "blocks.0.hook_resid_pre":
+            if (
+                "mlp" in name
+                or "resid" in name
+                or "embed" in name
+                or name == "blocks.0.hook_resid_pre"
+            ):
                 return [TorchIndex((None,))]
             return [TorchIndex((None, None, i)) for i in range(self.n_heads)]
 
+        # Step 1: Set/unset edges based on samples from mask
+
+        all_edges = corr.edge_dict()
+        edge_present_in_mask = {k: 0 for k in all_edges.keys()}
         for child, mask_logits in self._mask_parameter_dict.items():
             # Sample mask for this child
             sampled_mask = self.sample_mask(child)
-            # print(f"sampled mask for {child} has shape {sampled_mask.shape}")
             mask_row = 0
             for parent in self.hook_point_to_parents[child]:
                 for parent_index in indexes(parent):
                     for mask_col, child_index in enumerate(indexes(child)):
-                        # print(f"Setting edge {child} {child_index} <- {parent} {parent_index} to {mask_row, mask_col}")
-                        # print(f"={sampled_mask[mask_row][mask_col]}")
                         mask_value = sampled_mask[mask_row][mask_col].item()
                         edge = corr.edges[child][child_index][parent][parent_index]
+                        edge_present_in_mask[
+                            (child, child_index, parent, parent_index)
+                        ] = 1
                         edge.present = mask_value > 0.5
                         edge.effect_size = mask_value
                     mask_row += 1
-                    
-        # Delete a node's incoming edges if it has no outgoing edges or is not the output
+        show(f"\n-----\nNumber of present edges (num_edges):", self.num_edges())
+        present_nodes, all_nodes = get_present_nodes(corr)
+        show(f"Total number of nodes in edge_dict: {len(all_nodes)}")
+        show(f"Number of nodes present after sampling: {len(present_nodes)}")
+
+        # Step 2: Now we need to deal with edges that are not present in the mask
+
         def get_nodes_with_out_edges(corr: TLACDCCorrespondence):
+            """Returns a set of nodes that have outgoing edges"""
             nodes_with_out_edges = set()
             for (
                 receiver_name,
@@ -467,18 +581,43 @@ class EdgeLevelMaskedTransformer(torch.nn.Module):
                 sender_name,
                 sender_index,
             ), edge in corr.edge_dict().items():
-                nodes_with_out_edges.add(sender_name)
+                if edge.present:  # only consider present edges
+                    nodes_with_out_edges.add((sender_name, sender_index))
             return nodes_with_out_edges
-        
-        nodes_to_keep = get_nodes_with_out_edges(corr) | {f"blocks.{self.model.cfg.n_layers - 1}.hook_resid_post"}
-        for (
-            receiver_name,
-            receiver_index,
-            sender_name,
-            sender_index,
-        ), edge in corr.edge_dict().items():
-            if receiver_name not in nodes_to_keep:
-                edge.present = False
+
+        # Recursively remove edges to nodes that have no outgoing edges and is not the output node
+        while True:
+            edges_removed = 0
+            nodes_to_keep = get_nodes_with_out_edges(corr)
+            nodes_to_keep.add(
+                (
+                    f"blocks.{self.model.cfg.n_layers - 1}.hook_resid_post",
+                    TorchIndex((None,)),
+                )
+            )
+            for (
+                receiver_name,
+                receiver_index,
+                sender_name,
+                sender_index,
+            ), edge in corr.edge_dict().items():
+                if (receiver_name, receiver_index) not in nodes_to_keep:
+                    if (
+                        edge.present
+                    ):  # this condition is required to eventually break the loop
+                        show(
+                            f"Removing edge ({receiver_name}, {receiver_index}) <- ({sender_name}, {sender_index}) because it has no outgoing edges"
+                        )
+                        edge.present = False
+                        edges_removed += 1
+            if edges_removed == 0:  # this means we have pruned all nodes
+                break
+        show("\n\nremoved leaf nodes")
+        present_nodes, all_nodes = get_present_nodes(corr)
+        present_edges = sum([1 for edge in corr.edge_dict().values() if edge.present])
+        show(f"Number of edges present after pruning leaf nodes: {present_edges}")
+        show(f"Number of nodes present after pruning leaf nodes: {len(present_nodes)}")
+
         return corr
 
     def proportion_of_binary_scores(self) -> float:
