@@ -271,7 +271,7 @@ def graph_from_edges(
 
     if filename is not None:
         assert len(filename.split(".")) > 1, "filename must have an extension"
-        filename_without_extension = Path(filename).stem
+        filename_without_extension = filename[:-len(Path(filename).suffix)]
 
         dir_for_groups = Path(filename_without_extension)
         dir_for_groups.mkdir(exist_ok=True)
