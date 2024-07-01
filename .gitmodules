@@ -1,3 +1,0 @@
-[submodule "submodules/tracr"]
-	path = submodules/tracr
-	url = https://github.com/google-deepmind/tracr.git
