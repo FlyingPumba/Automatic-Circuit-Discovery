@@ -197,6 +197,7 @@ class NodeLevelMaskedTransformer(torch.nn.Module):
 
 def visualize_mask(
     masked_model: NodeLevelMaskedTransformer,
+    using_wandb: bool,
 ) -> tuple[int, list[TLACDCInterpNode]]:
     number_of_heads = masked_model.model.cfg.n_heads
     number_of_layers = masked_model.model.cfg.n_layers
@@ -243,7 +244,9 @@ def visualize_mask(
                 nodes_to_mask.append(node)
 
     # assert len(mask_scores_for_names) == 3 * number_of_heads * number_of_layers
-    log_plotly_bar_chart(x=node_name_list, y=mask_scores_for_names)
+    if using_wandb:
+        log_plotly_bar_chart(x=node_name_list, y=mask_scores_for_names)
+
     node_count = total_nodes - len(nodes_to_mask)
     return node_count, nodes_to_mask
 
@@ -258,15 +261,16 @@ def train_sp(
 
     torch.manual_seed(args.seed)
 
-    wandb.init(
-        name=args.wandb_name,
-        project=args.wandb_project,
-        entity=args.wandb_entity,
-        group=args.wandb_group,
-        config=args,
-        dir=args.wandb_dir,
-        mode=args.wandb_mode,
-    )
+    if args.using_wandb:
+        wandb.init(
+            name=args.wandb_name,
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            group=args.wandb_group,
+            config=args,
+            dir=args.wandb_dir,
+            mode=args.wandb_mode,
+        )
     test_metric_fns = all_task_things.test_metrics
 
     print("Reset subject:", args.reset_subject)
@@ -312,14 +316,15 @@ def train_sp(
 
         trainer.step()
 
-    number_of_nodes, nodes_to_mask = visualize_mask(masked_model)
-    wandb.log(
-        {
-            "regularisation_loss": regularizer_term.item(),
-            "specific_metric_loss": specific_metric_term.item(),
-            "total_loss": loss.item(),
-        }
-    )
+    number_of_nodes, nodes_to_mask = visualize_mask(masked_model, args.using_wandb)
+    if args.using_wandb:
+        wandb.log(
+            {
+                "regularisation_loss": regularizer_term.item(),
+                "specific_metric_loss": specific_metric_term.item(),
+                "total_loss": loss.item(),
+            }
+        )
 
     with torch.no_grad():
         # The loss has a lot of variance so let's just average over a few runs with the same seed
@@ -486,7 +491,9 @@ if __name__ == "__main__":
     to_log_dict["number_of_edges"] = corr.count_num_edges()
     to_log_dict["percentage_binary"] = percentage_binary
 
-    wandb.log(to_log_dict)
+    if args.using_wandb:
+        wandb.log(to_log_dict)
+
     if args.print_stats:
         canonical_circuit_subgraph = TLACDCCorrespondence.setup_from_model(masked_model.model, use_pos_embed=False)
         d_trues = set(get_true_edges())
@@ -515,4 +522,5 @@ if __name__ == "__main__":
         fpr = stats["false positive"] / (stats["false positive"] + stats["true negative"])
         print(f"Edge TPR: {tpr:.3f}. Edge FPR: {fpr:.3f}")
 
-    wandb.finish()
+    if args.using_wandb:
+        wandb.finish()
